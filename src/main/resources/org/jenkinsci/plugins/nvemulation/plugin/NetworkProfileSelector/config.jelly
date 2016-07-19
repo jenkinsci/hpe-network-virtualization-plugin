@@ -8,10 +8,10 @@
         <st:bind value="${descriptor}"/>
 
         function getTooltip(divElement, selectedProfileName) {
-            descriptorImpl.getTooltip(selectedProfileName,function(response) {
-                var value = response.responseObject();
-                divElement.title = value;
-            });
+        descriptorImpl.getTooltip(selectedProfileName,function(response) {
+        var value = response.responseObject();
+        divElement.title = value;
+        });
         }
     </script>
 

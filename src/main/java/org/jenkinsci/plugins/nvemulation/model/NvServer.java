@@ -122,22 +122,25 @@ public class NvServer extends AbstractDescribableImpl<NvServer> implements Seria
         }
 
         public FormValidation doCheckNvPort(@QueryParameter String value) throws IOException, ServletException {
-            return validatePort(value);
+            return validatePort(value, true);
         }
 
         public FormValidation doCheckProxyPort(@QueryParameter String value) throws IOException, ServletException {
-            return validatePort(value);
+            return validatePort(value, false);
         }
 
-        private FormValidation validatePort(String value) {
+        private FormValidation validatePort(String value, boolean isMandatory) {
             value = value.trim();
-            if (value.length() == 0) {
+            if (isMandatory && value.length() == 0) {
                 return FormValidation.error("Please set a port");
             }
             try {
-                int port = Integer.parseInt(value);
-                if (port <= 0) {
-                    return FormValidation.error("Port must be a positive integer");
+                int port = 0;
+                if (value.length() > 0) {
+                    port = Integer.parseInt(value);
+                    if (port <= 0) {
+                        return FormValidation.error("Port must be a positive integer");
+                    }
                 }
             } catch (NumberFormatException e) {
                 return FormValidation.error("Port must be a positive integer");

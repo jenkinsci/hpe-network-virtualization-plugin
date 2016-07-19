@@ -49,6 +49,25 @@ public class NetworkProfileSelector extends AbstractDescribableImpl<NetworkProfi
         return profileName;
     }
 
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof NetworkProfileSelector)) {
+            return false;
+        }
+
+        NetworkProfileSelector that = (NetworkProfileSelector) o;
+
+        return profileName.equals(that.profileName);
+    }
+
+    @Override
+    public int hashCode() {
+        return profileName.hashCode();
+    }
+
     @Extension
     public static class DescriptorImpl extends Descriptor<NetworkProfileSelector> {
         private final String TOOLTIP_FORMAT = "Latency (ms): %s\n" +

@@ -40,19 +40,17 @@ import org.kohsuke.stapler.*;
 import javax.servlet.ServletException;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 public class NvEmulationBuilder extends Builder {
 
     private final NvModel nvModel;
-    private List<NetworkProfileSelector> profileNames = new ArrayList<>();
+    private Set<NetworkProfileSelector> profileNames = new HashSet<>();
 
     // Fields in config.jelly must match the parameter names in the "DataBoundConstructor"
     @DataBoundConstructor
     public NvEmulationBuilder(String serverName, String includeClientIPs, String excludeServerIPs, String reportFiles, String thresholdsFile, UseProxyCheckbox useProxyCheckbox, List<BuildStep> steps) {
-        String envVariable = useProxyCheckbox == null? null : useProxyCheckbox.getEnvVariable();
+        String envVariable = useProxyCheckbox == null ? null : useProxyCheckbox.getEnvVariable();
 
         nvModel = new NvModel(serverName, includeClientIPs, excludeServerIPs, envVariable, reportFiles, thresholdsFile, steps);
         nvModel.setNvServer(getNvServer(serverName));
@@ -68,7 +66,7 @@ public class NvEmulationBuilder extends Builder {
 
     public NetworkProfileSelector[] getProfileNames() {
         if (null == profileNames) {
-            profileNames = new ArrayList<>();
+            profileNames = new HashSet<>();
         }
         return profileNames.toArray(new NetworkProfileSelector[profileNames.size()]);
     }
@@ -88,25 +86,12 @@ public class NvEmulationBuilder extends Builder {
     }
 
     private NvServer getNvServer(String serverName) {
-        NvServer result = null;
-
-        if(null != serverName && !serverName.isEmpty()) {
-            for (NvServer nvServer : getDescriptor().getNvServers()) {
-                if(serverName.equals(nvServer.getServerName())) {
-                    result = nvServer;
-                    break;
-                }
-            }
-        }
-
-        return result;
+        return getDescriptor().getNvServer(serverName);
     }
 
     @Override
     public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
-        NvEmulationInvoker invoker = new NvEmulationInvoker(nvModel);
-
-        return invoker.invoke(build, launcher, listener);
+        return new NvEmulationInvoker(nvModel, build, launcher, listener).invoke();
     }
 
     @Override
@@ -156,6 +141,18 @@ public class NvEmulationBuilder extends Builder {
             return nvServers.toArray(new NvServer[nvServers.size()]);
         }
 
+        public NvServer getNvServer(String serverName) {
+            NvServer result = null;
+            for (NvServer nvServer : nvServers) {
+                if (serverName.equals(nvServer.getServerName())) {
+                    result = nvServer;
+                    break;
+                }
+            }
+
+            return result;
+        }
+
         public ListBoxModel doFillServerNameItems() {
             ListBoxModel items = new ListBoxModel();
             for (NvServer nvServer : nvServers) {
@@ -174,7 +171,7 @@ public class NvEmulationBuilder extends Builder {
         }
 
         private FormValidation validateIPs(String value) {
-            value = value.trim();
+            value = value.replace(" ", "");
             String[] ips = value.split(";");
             for (String ip : ips) {
                 if (!ip.isEmpty()) {
@@ -194,6 +191,20 @@ public class NvEmulationBuilder extends Builder {
             return FormValidation.ok();
         }
 
+        public FormValidation doCheckUseProxyCheckbox(@QueryParameter String value, @QueryParameter String serverName) throws IOException, ServletException {
+            NvServer nvServer = getNvServer(serverName);
+            if(null != nvServer) {
+                boolean isProxyChecked = Boolean.parseBoolean(value);
+                if(isProxyChecked) {
+                    if(nvServer.getProxyPort().isEmpty()) {
+                        return FormValidation.error("The proxy port for the selected NV Test Manager was not configured");
+                    }
+                }
+            }
+
+            return FormValidation.ok();
+        }
+
         public FormValidation doCheckEnvVariable(@QueryParameter String value) throws IOException, ServletException {
             if (value.trim().length() == 0) {
                 return FormValidation.error("Please set an environment variable name");
@@ -204,7 +215,7 @@ public class NvEmulationBuilder extends Builder {
 
         public FormValidation doCheckReportFiles(@AncestorInPath AbstractProject project, @QueryParameter String value) throws IOException, ServletException {
             if (value.trim().length() == 0) {
-                return FormValidation.ok();
+                return FormValidation.error("Please set pattern for test report XMLs");
             }
 
             return FilePath.validateFileMask(project.getSomeWorkspace(), value);

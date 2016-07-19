@@ -12,7 +12,7 @@
         <f:textbox name="nvPort" clazz="required" default="8182"/>
     </f:entry>
     <f:entry title="Proxy Port" field="proxyPort">
-        <f:number name="proxyPort" clazz="required" default="8080"/>
+        <f:number name="proxyPort" clazz="required" default="8888"/>
     </f:entry>
     <f:entry title="Username" field="username">
         <f:textbox name="username" clazz="required"/>

@@ -30,6 +30,7 @@ import org.jenkinsci.plugins.nvemulation.plugin.results.NvJUnitResultsHandler;
 import org.jenkinsci.remoting.RoleChecker;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -41,16 +42,22 @@ public class NvEmulationInvoker {
     private static final String DEFAULT_TRANSACTION = "Transaction";
 
     private final NvModel nvModel;
+    private AbstractBuild<?, ?> build;
+    private Launcher launcher;
+    private BuildListener listener;
 
     private List<String> possibleIps;
     private NvNetworkProfile currentProfile;
-    private NvJUnitResultsHandler jUnitHandler;
+    private NvJUnitResultsHandler jUnitHandler = null;
 
-    public NvEmulationInvoker(NvModel nvModel) {
+    public NvEmulationInvoker(NvModel nvModel, AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) {
         this.nvModel = nvModel;
+        this.build = build;
+        this.launcher = launcher;
+        this.listener = listener;
     }
 
-    public boolean invoke(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+    public boolean invoke() throws InterruptedException, IOException {
         List<NvNetworkProfile> profiles = nvModel.getProfiles();
         if (null == profiles || profiles.size() == 0) {
             return invokeBuildSteps(build, launcher, listener);
@@ -60,36 +67,40 @@ public class NvEmulationInvoker {
                 listener.getLogger().println("Thresholds file is not valid. Tests will not be affected by thresholds. Check that the file exists and is readable. Check file contents correctness.");
             }
 
-            jUnitHandler = new NvJUnitResultsHandler(thresholdsMap, nvModel.getReportFiles());
+            if (null != nvModel.getReportFiles() && !nvModel.getReportFiles().isEmpty()) {
+                jUnitHandler = new NvJUnitResultsHandler(thresholdsMap, nvModel.getReportFiles());
+            } else {
+                listener.getLogger().println("JUnit test xmls pattern is null or empty. Thresholds will not be imposed on tests.");
+            }
 
-            possibleIps = getPossibleIpAddresses(launcher);
-            initProxy(build);
+            possibleIps = getPossibleIpAddresses();
+            initProxy();
 
-            Iterator<NvNetworkProfile> profilersIter = profiles.iterator();
+            Iterator<NvNetworkProfile> profilesIter = profiles.iterator();
             NvContext context = new NvContext();
             NvDataHolder.getInstance().put(NvTestUtils.getBuildKey(build), context);
 
-            Test test = initAndStartTest(build, listener, profilersIter);
+            Test test = initAndStartTest(profilesIter);
             context.setTest(test);
 
-            Transaction transaction = initTransaction(listener, test);
+            Transaction transaction = initTransaction(test);
             context.setTransaction(transaction);
 
             context.increaseRun();
 
-            return invokePerProfile(build, launcher, listener, context, profilersIter);
+            return invokePerProfile(context, profilesIter);
         }
     }
 
     private Map<String, Float> readThresholds() throws IOException {
-        if (!NvValidatorUtils.validateFile(nvModel.getThresholdsFile())) {
+        if (null == nvModel.getThresholdsFile() || nvModel.getThresholdsFile().isEmpty() || !NvValidatorUtils.validateFile(nvModel.getThresholdsFile())) {
             return null;
         }
 
         return NvValidatorUtils.readThresholdsFile(nvModel.getThresholdsFile());
     }
 
-    private boolean invokePerProfile(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, NvContext context, Iterator<NvNetworkProfile> profilersIter) throws IOException, InterruptedException {
+    private boolean invokePerProfile(NvContext context, Iterator<NvNetworkProfile> profilersIter) throws IOException, InterruptedException {
         if (context.getRun() > 1) {
             currentProfile = profilersIter.next();
             listener.getLogger().print(currentProfile);
@@ -129,27 +140,29 @@ public class NvEmulationInvoker {
 
             context.increaseRun();
 
-            handleTestResults(build, launcher, listener, false);
+            handleTestResults(false);
 
-            return invokePerProfile(build, launcher, listener, context, profilersIter);
+            return invokePerProfile(context, profilersIter);
         } else { // last profile, finish
             NvTestUtils.stopTestEmulation(build, listener);
 
-            handleTestResults(build, launcher, listener, true);
+            handleTestResults(true);
 
             return true;
         }
 //        }
     }
 
-    private void handleTestResults(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener, boolean finalize) throws IOException, InterruptedException {
-        jUnitHandler.handle(build, launcher, listener, currentProfile);
-        if (finalize) {
-            jUnitHandler.finalizeResults(build);
+    private void handleTestResults(boolean finalize) throws IOException, InterruptedException {
+        if (jUnitHandler != null) {
+            jUnitHandler.handle(build, launcher, listener, currentProfile);
+            if (finalize) {
+                jUnitHandler.finalizeResults(build);
+            }
         }
     }
 
-    private Transaction initTransaction(BuildListener listener, Test test) throws IOException {
+    private Transaction initTransaction(Test test) throws IOException {
         try {
             test.connectToTransactionManager();
         } catch (NVExceptions.ServerErrorException e) {
@@ -168,15 +181,18 @@ public class NvEmulationInvoker {
         return transaction;
     }
 
-    private void initProxy(AbstractBuild<?, ?> build) throws IOException, InterruptedException {
+    private void initProxy() throws IOException, InterruptedException {
         if (nvModel.isUseProxy()) {
+            if(nvModel.getNvServer().getProxyPort().isEmpty()) {
+                throw new ConnectException("Proxy port was not configured for the selected NV Test Manager");
+            }
             VariableInjectionAction action = new VariableInjectionAction(nvModel.getEnvVariable(),
                     nvModel.getNvServer().getServerIp() + ":" + nvModel.getNvServer().getProxyPort());
             build.addAction(action);
         }
     }
 
-    private Test initAndStartTest(AbstractBuild<?, ?> build, BuildListener listener, Iterator<NvNetworkProfile> profilersIter) throws IOException {
+    private Test initAndStartTest(Iterator<NvNetworkProfile> profilersIter) throws IOException {
         TestManager tm = new TestManager(nvModel.getNvServer().getServerIp(), Integer.parseInt(nvModel.getNvServer().getNvPort()), nvModel.getNvServer().getUsername(), nvModel.getNvServer().getPassword());
         try {
             tm.init();
@@ -248,10 +264,24 @@ public class NvEmulationInvoker {
         // add possible ips to the list (host network interfaces)
         Set<String> ips = new HashSet<>(possibleIps);
         // add included ips provided by the user
+        boolean invalidIpsFound = false;
         if (null != nvModel.getIncludeClientIPs() && !nvModel.getIncludeClientIPs().isEmpty()) {
             String[] includedIps = nvModel.getIncludeClientIPs().split(";");
-            ips.addAll(Arrays.asList(includedIps));
+            for (String ip : includedIps) {
+                if (!ip.isEmpty()) {
+                    if (isIpValid(ip)) {
+                        ips.add(ip);
+                    } else {
+                        invalidIpsFound = true;
+                    }
+                }
+            }
+
+            if (invalidIpsFound) {
+                listener.getLogger().println("Invalid IPs were found in \"Include Client IPs\" section. It might affect network emulation");
+            }
         }
+
         String[] ranges;
         for (String includedIp : ips) {
             if (!includedIp.isEmpty()) {
@@ -267,24 +297,49 @@ public class NvEmulationInvoker {
         }
     }
 
+    private boolean isIpValid(String ip) {
+        if (ip.contains("-")) {
+            String[] ranges = ip.split("-");
+            if (!NvValidatorUtils.isValidHostIp(ranges[0]) || !NvValidatorUtils.isValidHostIp(ranges[1])) {
+                listener.getLogger().println("IP range: " + ip + " contains an invalid IPv4 address");
+                return false;
+            }
+        } else {
+            if (!NvValidatorUtils.isValidHostIp(ip)) {
+                listener.getLogger().println("IP: " + ip + " is an invalid IPv4 address");
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void addCustomExcludeServerIPs(Flow flow) throws NVExceptions.NotSupportedException, NVExceptions.IllegalArgumentException {
         if (null != nvModel.getExcludeServerIPs() && !nvModel.getExcludeServerIPs().isEmpty()) {
             String[] excludedIps = nvModel.getExcludeServerIPs().split(";");
             String[] ranges;
+            boolean invalidIpsFound = false;
             for (String excludedIp : excludedIps) {
                 if (!excludedIp.isEmpty()) {
-                    if (excludedIp.contains("-")) { // handle IP range
-                        ranges = excludedIp.split("-");
-                        flow.excludeDestIPRange(new IPRange(ranges[0], ranges[1], 0, IPRange.Protocol.ALL.getId()));
+                    if (isIpValid(excludedIp)) {
+                        if (excludedIp.contains("-")) { // handle IP range
+                            ranges = excludedIp.split("-");
+                            flow.excludeDestIPRange(new IPRange(ranges[0], ranges[1], 0, IPRange.Protocol.ALL.getId()));
+                        } else {
+                            flow.excludeDestIPRange(new IPRange(excludedIp, excludedIp, 0, IPRange.Protocol.ALL.getId()));
+                        }
                     } else {
-                        flow.excludeDestIPRange(new IPRange(excludedIp, excludedIp, 0, IPRange.Protocol.ALL.getId()));
+                        invalidIpsFound = true;
                     }
                 }
+            }
+
+            if (invalidIpsFound) {
+                listener.getLogger().println("Invalid IPs were found in \"Exclude Server IPs\" section");
             }
         }
     }
 
-    private List<String> getPossibleIpAddresses(Launcher launcher) throws IOException, InterruptedException {
+    private List<String> getPossibleIpAddresses() throws IOException, InterruptedException {
         // Get a "channel" to the build machine and run the task there
         return launcher.getChannel().call(new HostIpRetrieverCallable());
     }
