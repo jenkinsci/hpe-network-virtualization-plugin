@@ -8,7 +8,7 @@
         <version>2.9</version>
     </parent>
     <artifactId>hpe-network-virtualization</artifactId>
-    <version>1.0</version>
+    <version>1.1-SNAPSHOT</version>
     <packaging>hpi</packaging>
     <name>HPE Network Virtualization plugin</name>
     <description>Allows tests to be run over different network conditions</description>
@@ -49,7 +49,7 @@
         <connection>scm:git:git://github.com/jenkinsci/hpe-network-virtualization-plugin.git</connection>
         <developerConnection>scm:git:git@github.com:jenkinsci/hpe-network-virtualization-plugin.git</developerConnection>
         <url>https://github.com/jenkinsci/hpe-network-virtualization-plugin</url>
-        <tag>hpe-network-virtualization-1.0</tag>
+        <tag>HEAD</tag>
     </scm>
 
     <repositories>
